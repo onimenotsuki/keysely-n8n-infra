@@ -85,9 +85,12 @@ jobs:
       - name: Deployment Summary
         run: |
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Stack**: N8nStack" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack**: ${{ env.STACK_NAME }}-${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Elastic IP**: ${{ steps.stack-outputs.outputs.elastic_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### EC2 Instance" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance ID**: ${{ steps.stack-outputs.outputs.instance_id }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Configure DNS A record in Netlify: \`n8n.keysely.com\` → \`${{ steps.stack-outputs.outputs.elastic_ip }}\`" >> $GITHUB_STEP_SUMMARY
