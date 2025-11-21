@@ -62,6 +62,9 @@ jobs:
         run: npm run build && cdk synth
 
       - name: CDK Deploy
+        env:
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
         run: cdk deploy --require-approval never --all
 
       - name: Get stack outputs
