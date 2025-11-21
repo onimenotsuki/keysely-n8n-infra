@@ -86,10 +86,9 @@ export class N8nStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain secret even if stack is deleted
     });
 
-    // Custom Resource Lambda to retrieve and store the private key
+    // Custom Resource Lambda to store the private key in Secrets Manager
     // Note: When using CfnKeyPair with keyFormat: 'pem', the private key is available
-    // immediately via the KeyMaterial attribute, but we need to wait for the KeyPair
-    // to be created before we can retrieve it via API
+    // via the KeyMaterial attribute, which we pass directly to the Lambda
     const keyRetrieverLambda = new lambda.Function(this, 'KeyRetrieverFunction', {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
@@ -100,23 +99,14 @@ import json
 
 def handler(event, context):
     try:
-        ec2 = boto3.client('ec2')
         secretsmanager = boto3.client('secretsmanager')
         
         if event['RequestType'] == 'Delete':
             cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
             return
         
-        key_pair_id = event['ResourceProperties']['KeyPairId']
+        private_key = event['ResourceProperties']['PrivateKey']
         secret_arn = event['ResourceProperties']['SecretArn']
-        
-        # Get the private key using GetKeyPair API
-        # This API is available when keyFormat is 'pem'
-        response = ec2.get_key_pair(
-            KeyPairId=key_pair_id,
-            IncludePublicKey=False
-        )
-        private_key = response['KeyMaterial']
         
         # Store in Secrets Manager using put_secret_value (works with or without initial value)
         secretsmanager.put_secret_value(
@@ -136,22 +126,15 @@ def handler(event, context):
       timeout: cdk.Duration.minutes(5),
     });
 
-    // Grant permissions to the Lambda
-    keyRetrieverLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ['ec2:GetKeyPair'],
-        resources: ['*'],
-      })
-    );
-
     privateKeySecret.grantWrite(keyRetrieverLambda);
 
     // Custom Resource to trigger the Lambda after KeyPair is created
+    // Pass the KeyMaterial using CloudFormation GetAtt function
+    // KeyMaterial is available as a physical resource attribute when keyFormat is 'pem'
     const keyRetriever = new cdk.CustomResource(this, 'KeyRetriever', {
       serviceToken: keyRetrieverLambda.functionArn,
       properties: {
-        KeyPairId: keyPair.attrKeyPairId,
+        PrivateKey: cdk.Fn.getAtt(keyPair.logicalId, 'KeyMaterial'),
         SecretArn: privateKeySecret.secretArn,
       },
     });
