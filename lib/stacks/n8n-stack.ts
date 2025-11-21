@@ -1,6 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -63,6 +65,93 @@ export class N8nStack extends cdk.Stack {
       'Allow SSH from specified CIDR'
     );
 
+    // Create EC2 Key Pair
+    const keyPair = new ec2.CfnKeyPair(this, 'N8nKeyPair', {
+      keyName: `n8n-keypair-${this.stackName}`,
+      keyType: 'rsa',
+      keyFormat: 'pem',
+    });
+
+    // Create Secrets Manager secret to store the private key
+    const privateKeySecret = new secretsmanager.Secret(this, 'N8nPrivateKeySecret', {
+      secretName: `/n8n/ec2/private-key`,
+      description: 'Private key for n8n EC2 instance SSH access',
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain secret even if stack is deleted
+    });
+
+    // Custom Resource Lambda to retrieve and store the private key
+    // Note: When using CfnKeyPair with keyFormat: 'pem', the private key is available
+    // immediately via the KeyMaterial attribute, but we need to wait for the KeyPair
+    // to be created before we can retrieve it via API
+    const keyRetrieverLambda = new lambda.Function(this, 'KeyRetrieverFunction', {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(`
+import boto3
+import cfnresponse
+import json
+
+def handler(event, context):
+    try:
+        ec2 = boto3.client('ec2')
+        secretsmanager = boto3.client('secretsmanager')
+        
+        if event['RequestType'] == 'Delete':
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
+        
+        key_pair_id = event['ResourceProperties']['KeyPairId']
+        secret_arn = event['ResourceProperties']['SecretArn']
+        
+        # Get the private key using GetKeyPair API
+        # This API is available when keyFormat is 'pem'
+        response = ec2.get_key_pair(
+            KeyPairId=key_pair_id,
+            IncludePublicKey=False
+        )
+        private_key = response['KeyMaterial']
+        
+        # Store in Secrets Manager
+        secretsmanager.put_secret_value(
+            SecretId=secret_arn,
+            SecretString=private_key
+        )
+        
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+            'PrivateKeySecretArn': secret_arn
+        })
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        cfnresponse.send(event, context, cfnresponse.FAILED, {})
+`),
+      timeout: cdk.Duration.minutes(5),
+    });
+
+    // Grant permissions to the Lambda
+    keyRetrieverLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ec2:GetKeyPair'],
+        resources: ['*'],
+      })
+    );
+
+    privateKeySecret.grantWrite(keyRetrieverLambda);
+
+    // Custom Resource to trigger the Lambda after KeyPair is created
+    const keyRetriever = new cdk.CustomResource(this, 'KeyRetriever', {
+      serviceToken: keyRetrieverLambda.functionArn,
+      properties: {
+        KeyPairId: keyPair.attrKeyPairId,
+        SecretArn: privateKeySecret.secretArn,
+      },
+    });
+
+    // Ensure KeyPair is created before the Custom Resource runs
+    keyRetriever.node.addDependency(keyPair);
+
     // Elastic IP
     const elasticIP = new ec2.CfnEIP(this, 'N8nElasticIP', {
       domain: 'vpc',
@@ -106,6 +195,7 @@ export class N8nStack extends cdk.Stack {
       securityGroup: ec2SecurityGroup,
       role: ec2Role,
       userData,
+      keyName: keyPair.keyName,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
       },
@@ -141,6 +231,26 @@ export class N8nStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SSHCommand', {
       value: `ssh -i <your-key.pem> ec2-user@${elasticIP.ref}`,
       description: 'SSH command to connect to the instance',
+    });
+
+    new cdk.CfnOutput(this, 'KeyPairName', {
+      value: keyPair.keyName,
+      description: 'Name of the EC2 Key Pair',
+    });
+
+    new cdk.CfnOutput(this, 'PrivateKeySecretArn', {
+      value: privateKeySecret.secretArn,
+      description: 'ARN of the Secrets Manager secret containing the private key',
+    });
+
+    new cdk.CfnOutput(this, 'GetPrivateKeyCommand', {
+      value: `aws secretsmanager get-secret-value --secret-id ${privateKeySecret.secretArn} --query SecretString --output text > n8n-key.pem && chmod 400 n8n-key.pem`,
+      description: 'Command to retrieve and save the private key from Secrets Manager',
+    });
+
+    new cdk.CfnOutput(this, 'SSMSessionCommand', {
+      value: `aws ssm start-session --target ${instance.instanceId}`,
+      description: 'Alternative: Connect using AWS Systems Manager Session Manager (no key needed)',
     });
   }
 }

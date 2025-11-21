@@ -230,6 +230,38 @@ The pipeline uses OIDC for AWS authentication. Ensure your IAM role (`github-act
 # SSH into the instance
 ssh -i <your-key.pem> ec2-user@<elastic-ip>
 
+# Or use AWS Systems Manager Session Manager (no key needed)
+aws ssm start-session --target <instance-id>
+```
+
+### Verifying Traefik Configuration
+
+A health check script is automatically installed on the EC2 instance during deployment. Use it to verify Traefik is configured correctly:
+
+```bash
+# SSH into the instance
+ssh -i <your-key.pem> ec2-user@<elastic-ip>
+
+# Run the health check script
+check-traefik
+
+# Or specify a custom domain
+check-traefik n8n.keysely.com
+```
+
+The script checks:
+- Docker container status
+- Traefik logs and configuration
+- Let's Encrypt certificate status
+- DNS resolution
+- HTTP/HTTPS connectivity
+- SSL certificate validity
+- Traefik routing configuration
+- Port bindings
+
+### Checking Container Status
+
+```bash
 # Check Docker containers
 docker ps
 
