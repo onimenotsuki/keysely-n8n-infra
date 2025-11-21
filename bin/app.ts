@@ -12,4 +12,3 @@ new N8nStack(app, 'N8nStack', {
   },
   description: 'n8n infrastructure stack with EC2, Docker Compose, PostgreSQL, and Traefik',
 });
-

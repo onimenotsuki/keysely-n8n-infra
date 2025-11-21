@@ -16,7 +16,8 @@ export class N8nStack extends cdk.Stack {
     super(scope, id, props);
 
     const domainName = props?.domainName || 'n8n.keysely.com';
-    const instanceType = props?.instanceType || ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO);
+    const instanceType =
+      props?.instanceType || ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO);
     const allowedSSHCidr = props?.allowedSSHCidr || '0.0.0.0/0'; // Restrict this in production
 
     // Use default VPC for free tier compatibility
@@ -71,9 +72,7 @@ export class N8nStack extends cdk.Stack {
     const ec2Role = new iam.Role(this, 'N8nEC2Role', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       description: 'IAM role for n8n EC2 instance',
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
-      ],
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')],
     });
 
     // Grant permissions to read SSM parameters for secrets
@@ -81,9 +80,7 @@ export class N8nStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-        resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/n8n/*`,
-        ],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/n8n/*`],
       })
     );
 
@@ -147,4 +144,3 @@ export class N8nStack extends cdk.Stack {
     });
   }
 }
-

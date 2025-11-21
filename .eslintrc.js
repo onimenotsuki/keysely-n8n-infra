@@ -5,11 +5,7 @@ module.exports = {
     sourceType: 'module',
     project: './tsconfig.json',
   },
-  extends: [
-    'airbnb-base',
-    'airbnb-typescript/base',
-    'prettier',
-  ],
+  extends: ['airbnb-base', 'airbnb-typescript/base', 'prettier'],
   plugins: ['@typescript-eslint', 'import'],
   env: {
     node: true,
@@ -21,12 +17,7 @@ module.exports = {
     'import/no-extraneous-dependencies': [
       'error',
       {
-        devDependencies: [
-          '**/*.test.ts',
-          '**/*.spec.ts',
-          '**/jest.config.js',
-          '**/jest.setup.js',
-        ],
+        devDependencies: ['**/*.test.ts', '**/*.spec.ts', '**/jest.config.js', '**/jest.setup.js'],
       },
     ],
     '@typescript-eslint/no-unused-vars': [
@@ -38,6 +29,7 @@ module.exports = {
     ],
     'no-console': ['warn', { allow: ['warn', 'error'] }],
     'class-methods-use-this': 'off',
+    'no-new': 'off', // CDK uses 'new' for side effects (resource creation)
   },
   ignorePatterns: [
     'node_modules/',
@@ -48,4 +40,3 @@ module.exports = {
     '!.eslintrc.js',
   ],
 };
-

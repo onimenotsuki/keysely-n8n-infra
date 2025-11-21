@@ -27,4 +27,3 @@
   "include": ["**/*.ts"],
   "exclude": ["node_modules", "cdk.out", "dist"]
 }
-
