@@ -9,6 +9,7 @@ on:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   NODE_VERSION: '22'
+  STACK_NAME: keysely-n8n-stack
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
 
 permissions:
@@ -62,16 +63,21 @@ jobs:
         run: npm run build && cdk synth
 
       - name: CDK Deploy
+        id: deploy-stack
         env:
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
-          CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
-        run: cdk deploy --require-approval never --all
+            CDK_STACK_NAME: ${{ env.STACK_NAME }}-${{ env.AWS_REGION }}
+            CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+            CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
+        run: |
+          npx cdk deploy --require-approval never
 
       - name: Get stack outputs
         id: stack-outputs
+        env:
+          CDK_STACK_NAME: ${{ env.STACK_NAME }}-${{ env.AWS_REGION }}
         run: |
           ELASTIC_IP=$(aws cloudformation describe-stacks \
-            --stack-name N8nStack \
+            --stack-name ${{ env.CDK_STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`ElasticIP`].OutputValue' \
             --output text)
