@@ -1,0 +1,51 @@
+module.exports = {
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    ecmaVersion: 2022,
+    sourceType: 'module',
+    project: './tsconfig.json',
+  },
+  extends: [
+    'airbnb-base',
+    'airbnb-typescript/base',
+    'prettier',
+  ],
+  plugins: ['@typescript-eslint', 'import'],
+  env: {
+    node: true,
+    es2022: true,
+    jest: true,
+  },
+  rules: {
+    'import/prefer-default-export': 'off',
+    'import/no-extraneous-dependencies': [
+      'error',
+      {
+        devDependencies: [
+          '**/*.test.ts',
+          '**/*.spec.ts',
+          '**/jest.config.js',
+          '**/jest.setup.js',
+        ],
+      },
+    ],
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+      },
+    ],
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'class-methods-use-this': 'off',
+  },
+  ignorePatterns: [
+    'node_modules/',
+    'dist/',
+    'cdk.out/',
+    '*.js',
+    '!jest.config.js',
+    '!.eslintrc.js',
+  ],
+};
+

@@ -1,0 +1,87 @@
+name: infra
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  NODE_VERSION: '22'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Check code formatting
+        run: npm run format:check
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: CDK Bootstrap (if needed)
+        run: |
+          if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
+          fi
+
+      - name: CDK Synth
+        run: npm run build && cdk synth
+
+      - name: CDK Deploy
+        run: cdk deploy --require-approval never --all
+
+      - name: Get stack outputs
+        id: stack-outputs
+        run: |
+          ELASTIC_IP=$(aws cloudformation describe-stacks \
+            --stack-name N8nStack \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ElasticIP`].OutputValue' \
+            --output text)
+          echo "elastic_ip=$ELASTIC_IP" >> $GITHUB_OUTPUT
+          echo "Elastic IP: $ELASTIC_IP"
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack**: N8nStack" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Elastic IP**: ${{ steps.stack-outputs.outputs.elastic_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Configure DNS A record in Netlify: \`n8n.keysely.com\` → \`${{ steps.stack-outputs.outputs.elastic_ip }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Wait for DNS propagation (usually 5-15 minutes)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Traefik will automatically obtain SSL certificate from Let's Encrypt" >> $GITHUB_STEP_SUMMARY
+          echo "4. Access n8n at: https://n8n.keysely.com" >> $GITHUB_STEP_SUMMARY
+
