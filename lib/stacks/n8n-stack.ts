@@ -74,9 +74,15 @@ export class N8nStack extends cdk.Stack {
 
     // Create Secrets Manager secret to store the private key
     // Use stack name in secret name to avoid conflicts when recreating stack
+    // Create with temporary value that will be replaced by Lambda
     const privateKeySecret = new secretsmanager.Secret(this, 'N8nPrivateKeySecret', {
-      secretName: `/n8n/ec2/private-key`,
+      secretName: `/n8n/ec2/private-key-${this.stackName}`,
       description: 'Private key for n8n EC2 instance SSH access',
+      generateSecretString: {
+        secretStringTemplate: '{}',
+        generateStringKey: 'temp',
+        excludeCharacters: '{}',
+      },
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain secret even if stack is deleted
     });
 
@@ -112,7 +118,7 @@ def handler(event, context):
         )
         private_key = response['KeyMaterial']
         
-        # Store in Secrets Manager
+        # Store in Secrets Manager using put_secret_value (works with or without initial value)
         secretsmanager.put_secret_value(
             SecretId=secret_arn,
             SecretString=private_key
