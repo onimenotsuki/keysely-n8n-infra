@@ -65,7 +65,7 @@ jobs:
       - name: CDK Deploy
         id: deploy-stack
         env:
-            CDK_STACK_NAME: ${{ env.STACK_NAME }}-${{ env.AWS_REGION }}
+            CDK_STACK_NAME: ${{ env.STACK_NAME }}
             CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
             CDK_DEFAULT_ACCOUNT: ${{ env.AWS_ACCOUNT_ID }}
         run: |
@@ -73,11 +73,9 @@ jobs:
 
       - name: Get stack outputs
         id: stack-outputs
-        env:
-          CDK_STACK_NAME: ${{ env.STACK_NAME }}-${{ env.AWS_REGION }}
         run: |
           ELASTIC_IP=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.CDK_STACK_NAME }} \
+            --stack-name ${{ env.STACK_NAME }}-${{ env.AWS_REGION }} \
             --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`ElasticIP`].OutputValue' \
             --output text)
