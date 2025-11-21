@@ -77,7 +77,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.n8n.rule=Host(`${DOMAIN_NAME}`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.n8n.tls.options=default"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
 
   traefik:
@@ -93,15 +95,18 @@ services:
       - traefik_data:/letsencrypt
     command:
       - --api.dashboard=false
+      - --log.level=INFO
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.http.tls=true
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN_NAME}}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.acmeserver=https://acme-v02.api.letsencrypt.org/directory
     networks:
       - n8n-network
 
@@ -136,6 +141,21 @@ sudo -u ec2-user docker-compose up -d
 
 # Wait for services to be ready
 sleep 30
+
+# Fix permissions for acme.json (Traefik needs to write to it)
+# Wait a bit more for Traefik to create the volume and acme.json
+sleep 15
+# Find the acme.json file in any traefik_data volume
+for acme_file in /var/lib/docker/volumes/*traefik*/_data/acme.json; do
+    if [ -f "$acme_file" ]; then
+        sudo chmod 600 "$acme_file"
+        sudo chown root:root "$acme_file"
+        echo "Fixed permissions for acme.json: $acme_file"
+        break
+    fi
+done
+# Also fix permissions inside the container if it exists
+sudo -u ec2-user docker exec traefik chmod 600 /letsencrypt/acme.json 2>/dev/null || true
 
 # Log the initial admin password (in production, use AWS Secrets Manager)
 echo "n8n setup completed. Check /opt/n8n/docker/.env for credentials."
