@@ -75,7 +75,7 @@ export class N8nStack extends cdk.Stack {
     // Create Secrets Manager secret to store the private key
     // Use stack name in secret name to avoid conflicts when recreating stack
     const privateKeySecret = new secretsmanager.Secret(this, 'N8nPrivateKeySecret', {
-      secretName: `/n8n/ec2/${this.stackName}-private-key`,
+      secretName: `/n8n/ec2/private-key`,
       description: 'Private key for n8n EC2 instance SSH access',
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain secret even if stack is deleted
     });
