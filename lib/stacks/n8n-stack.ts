@@ -75,9 +75,9 @@ export class N8nStack extends cdk.Stack {
     // Use stack name in secret name to avoid conflicts when recreating stack
     const secretName = `/n8n/ec2/private-key-${this.stackName}`;
 
-    // Custom Resource Lambda to create secret and store the private key in Secrets Manager
-    // Note: When using CfnKeyPair with keyFormat: 'pem', the private key is available
-    // via the KeyMaterial attribute, which we pass directly to the Lambda
+    // Custom Resource Lambda to retrieve private key from Parameter Store and store in Secrets Manager
+    // Note: When using CfnKeyPair with keyFormat: 'pem', CloudFormation stores the private key
+    // in AWS Systems Manager Parameter Store under /ec2/keypair/{key_pair_id}
     // Lambda will create the secret if it doesn't exist to avoid conflicts
     const keyRetrieverLambda = new lambda.Function(this, 'KeyRetrieverFunction', {
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -86,17 +86,43 @@ export class N8nStack extends cdk.Stack {
 import boto3
 import cfnresponse
 import json
+import time
 
 def handler(event, context):
     try:
+        ssm = boto3.client('ssm')
         secretsmanager = boto3.client('secretsmanager')
         
         if event['RequestType'] == 'Delete':
             cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
             return
         
-        private_key = event['ResourceProperties']['PrivateKey']
+        key_pair_id = event['ResourceProperties']['KeyPairId']
         secret_name = event['ResourceProperties']['SecretName']
+        
+        # CloudFormation stores the private key in Parameter Store
+        # The parameter name is /ec2/keypair/{key_pair_id}
+        parameter_name = f'/ec2/keypair/{key_pair_id}'
+        
+        # Wait a bit for CloudFormation to finish storing the key in Parameter Store
+        max_retries = 10
+        retry_count = 0
+        private_key = None
+        
+        while retry_count < max_retries:
+            try:
+                response = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
+                private_key = response['Parameter']['Value']
+                break
+            except ssm.exceptions.ParameterNotFound:
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(2)
+                else:
+                    raise Exception(f'Private key not found in Parameter Store after {max_retries} retries')
+        
+        if not private_key:
+            raise Exception('Failed to retrieve private key from Parameter Store')
         
         # Try to get the secret to check if it exists
         try:
@@ -128,6 +154,15 @@ def handler(event, context):
       timeout: cdk.Duration.minutes(5),
     });
 
+    // Grant permissions to read from Parameter Store
+    keyRetrieverLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/ec2/keypair/*`],
+      })
+    );
+
     // Grant permissions to create, read, and write secrets
     keyRetrieverLambda.addToRolePolicy(
       new iam.PolicyStatement({
@@ -145,12 +180,11 @@ def handler(event, context):
     );
 
     // Custom Resource to trigger the Lambda after KeyPair is created
-    // Pass the KeyMaterial using CloudFormation GetAtt function
-    // KeyMaterial is available as a physical resource attribute when keyFormat is 'pem'
+    // Pass the KeyPairId so Lambda can retrieve the private key from Parameter Store
     const keyRetriever = new cdk.CustomResource(this, 'KeyRetriever', {
       serviceToken: keyRetrieverLambda.functionArn,
       properties: {
-        PrivateKey: cdk.Fn.getAtt(keyPair.logicalId, 'KeyMaterial'),
+        KeyPairId: keyPair.attrKeyPairId,
         SecretName: secretName,
       },
     });
