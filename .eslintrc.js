@@ -25,6 +25,28 @@ module.exports = {
       {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      },
+    ],
+    'no-underscore-dangle': ['error', { allow: ['_stack', '_unused'] }],
+    '@typescript-eslint/naming-convention': [
+      'error',
+      {
+        selector: 'variable',
+        format: ['camelCase', 'PascalCase', 'UPPER_CASE'],
+        filter: {
+          regex: '^_',
+          match: false,
+        },
+      },
+      {
+        selector: 'variable',
+        modifiers: ['unused'],
+        format: null,
+        filter: {
+          regex: '^_',
+          match: true,
+        },
       },
     ],
     'no-console': ['warn', { allow: ['warn', 'error'] }],
