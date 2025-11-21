@@ -82,18 +82,14 @@ describe('N8nStack', () => {
   });
 
   test('IAM role has SSM permissions', () => {
+    // Check for custom SSM parameter read permissions
     template.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: [
           {
             Effect: 'Allow',
-            Action: [
-              'ssm:UpdateInstanceInformation',
-              'ssmmessages:CreateControlChannel',
-              'ssmmessages:CreateDataChannel',
-              'ssmmessages:OpenControlChannel',
-              'ssmmessages:OpenDataChannel',
-            ],
+            Action: ['ssm:GetParameter', 'ssm:GetParameters'],
+            Resource: 'arn:aws:ssm:us-west-2:123456789012:parameter/n8n/*',
           },
         ],
       },
@@ -109,17 +105,12 @@ describe('N8nStack', () => {
   });
 
   test('EC2 instance uses Amazon Linux 2023', () => {
-    template.hasResourceProperties('AWS::EC2::Instance', {
-      ImageId: {
-        'Fn::FindInMap': [
-          'AWSRegion2AMI',
-          {
-            Ref: 'AWS::Region',
-          },
-          'AL2023x86_64',
-        ],
-      },
-    });
+    // CDK uses SSM Parameter Store for latest AMI, not FindInMap
+    const instanceResources = template.findResources('AWS::EC2::Instance');
+    const instance = Object.values(instanceResources)[0];
+    expect(instance.Properties.ImageId.Ref).toContain(
+      'SsmParameterValueawsserviceamiamazonlinuxlatestal2023'
+    );
   });
 
   test('security group allows all outbound traffic', () => {

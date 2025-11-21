@@ -105,7 +105,7 @@ export class N8nStack extends cdk.Stack {
       }),
       securityGroup: ec2SecurityGroup,
       role: ec2Role,
-      userData: ec2.UserData.custom(userData),
+      userData,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
       },
