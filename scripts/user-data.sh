@@ -154,13 +154,17 @@ sudo tee /etc/logrotate.d/docker-containers > /dev/null << 'LOGROTATE_EOF'
 LOGROTATE_EOF
 
 # Install utilities for health checks
-sudo yum install -y bind-utils curl
+sudo yum install -y bind-utils curl openssl
 
-# Create check-traefik script for monitoring
-sudo tee /usr/local/bin/check-traefik > /dev/null << 'CHECK_TRAEFIK_EOF'
+# Create scripts directory
+sudo mkdir -p /opt/n8n/scripts
+sudo chown ec2-user:ec2-user /opt/n8n/scripts
+
+# Create check-traefik-local.sh script for monitoring
+sudo tee /opt/n8n/scripts/check-traefik-local.sh > /dev/null << 'CHECK_TRAEFIK_LOCAL_EOF'
 #!/bin/bash
 # Script to verify Traefik configuration (runs locally on EC2 instance)
-# Usage: check-traefik [domain-name]
+# Usage: ./check-traefik-local.sh [domain-name]
 
 set -e
 
@@ -369,11 +373,15 @@ echo "  5. Check that Let's Encrypt can reach port 80 (for HTTP challenge)"
 echo "  6. Wait a few minutes for certificate provisioning (first time)"
 echo "  7. Restart services if needed: cd /opt/n8n/docker && docker-compose restart"
 echo ""
-CHECK_TRAEFIK_EOF
+CHECK_TRAEFIK_LOCAL_EOF
 
-# Make the script executable and available to all users
-sudo chmod +x /usr/local/bin/check-traefik
-sudo chown root:root /usr/local/bin/check-traefik
+# Make the script executable
+sudo chmod +x /opt/n8n/scripts/check-traefik-local.sh
+sudo chown ec2-user:ec2-user /opt/n8n/scripts/check-traefik-local.sh
 
-echo "check-traefik script installed at /usr/local/bin/check-traefik"
+# Also create a symlink in /usr/local/bin for easy access
+sudo ln -sf /opt/n8n/scripts/check-traefik-local.sh /usr/local/bin/check-traefik-local
+
+echo "check-traefik-local.sh script installed at /opt/n8n/scripts/check-traefik-local.sh"
+echo "Also available as: check-traefik-local"
 
