@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-west-2
+  AWS_REGION: ${{ vars.AWS_REGION }}
   NODE_VERSION: '22'
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
 
 permissions:
   id-token: write
@@ -16,8 +17,10 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Infrastructure
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    name: Deploy Infrastructure
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -52,7 +55,7 @@ jobs:
       - name: CDK Bootstrap (if needed)
         run: |
           if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
+            cdk bootstrap aws://${{ env.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
           fi
 
       - name: CDK Synth
