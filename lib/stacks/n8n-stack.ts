@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -72,23 +71,14 @@ export class N8nStack extends cdk.Stack {
       keyFormat: 'pem',
     });
 
-    // Create Secrets Manager secret to store the private key
+    // Secret name for storing the private key
     // Use stack name in secret name to avoid conflicts when recreating stack
-    // Create with temporary value that will be replaced by Lambda
-    const privateKeySecret = new secretsmanager.Secret(this, 'N8nPrivateKeySecret', {
-      secretName: `/n8n/ec2/private-key-${this.stackName}`,
-      description: 'Private key for n8n EC2 instance SSH access',
-      generateSecretString: {
-        secretStringTemplate: '{}',
-        generateStringKey: 'temp',
-        excludeCharacters: '{}',
-      },
-      removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain secret even if stack is deleted
-    });
+    const secretName = `/n8n/ec2/private-key-${this.stackName}`;
 
-    // Custom Resource Lambda to store the private key in Secrets Manager
+    // Custom Resource Lambda to create secret and store the private key in Secrets Manager
     // Note: When using CfnKeyPair with keyFormat: 'pem', the private key is available
     // via the KeyMaterial attribute, which we pass directly to the Lambda
+    // Lambda will create the secret if it doesn't exist to avoid conflicts
     const keyRetrieverLambda = new lambda.Function(this, 'KeyRetrieverFunction', {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'index.handler',
@@ -106,13 +96,25 @@ def handler(event, context):
             return
         
         private_key = event['ResourceProperties']['PrivateKey']
-        secret_arn = event['ResourceProperties']['SecretArn']
+        secret_name = event['ResourceProperties']['SecretName']
         
-        # Store in Secrets Manager using put_secret_value (works with or without initial value)
-        secretsmanager.put_secret_value(
-            SecretId=secret_arn,
-            SecretString=private_key
-        )
+        # Try to get the secret to check if it exists
+        try:
+            response = secretsmanager.describe_secret(SecretId=secret_name)
+            secret_arn = response['ARN']
+            # Secret exists, update it
+            secretsmanager.put_secret_value(
+                SecretId=secret_arn,
+                SecretString=private_key
+            )
+        except secretsmanager.exceptions.ResourceNotFoundException:
+            # Secret doesn't exist, create it
+            response = secretsmanager.create_secret(
+                Name=secret_name,
+                Description='Private key for n8n EC2 instance SSH access',
+                SecretString=private_key
+            )
+            secret_arn = response['ARN']
         
         cfnresponse.send(event, context, cfnresponse.SUCCESS, {
             'PrivateKeySecretArn': secret_arn
@@ -126,7 +128,21 @@ def handler(event, context):
       timeout: cdk.Duration.minutes(5),
     });
 
-    privateKeySecret.grantWrite(keyRetrieverLambda);
+    // Grant permissions to create, read, and write secrets
+    keyRetrieverLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'secretsmanager:CreateSecret',
+          'secretsmanager:DescribeSecret',
+          'secretsmanager:PutSecretValue',
+          'secretsmanager:GetSecretValue',
+        ],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:/n8n/ec2/private-key-*`,
+        ],
+      })
+    );
 
     // Custom Resource to trigger the Lambda after KeyPair is created
     // Pass the KeyMaterial using CloudFormation GetAtt function
@@ -135,9 +151,12 @@ def handler(event, context):
       serviceToken: keyRetrieverLambda.functionArn,
       properties: {
         PrivateKey: cdk.Fn.getAtt(keyPair.logicalId, 'KeyMaterial'),
-        SecretArn: privateKeySecret.secretArn,
+        SecretName: secretName,
       },
     });
+
+    // Reference to the secret for outputs (will be resolved by Lambda)
+    const privateKeySecretArn = keyRetriever.getAtt('PrivateKeySecretArn').toString();
 
     // Ensure KeyPair is created before the Custom Resource runs
     keyRetriever.node.addDependency(keyPair);
@@ -229,12 +248,16 @@ def handler(event, context):
     });
 
     new cdk.CfnOutput(this, 'PrivateKeySecretArn', {
-      value: privateKeySecret.secretArn,
+      value: privateKeySecretArn,
       description: 'ARN of the Secrets Manager secret containing the private key',
     });
 
     new cdk.CfnOutput(this, 'GetPrivateKeyCommand', {
-      value: `aws secretsmanager get-secret-value --secret-id ${privateKeySecret.secretArn} --query SecretString --output text > n8n-key.pem && chmod 400 n8n-key.pem`,
+      value: cdk.Fn.join('', [
+        'aws secretsmanager get-secret-value --secret-id ',
+        privateKeySecretArn,
+        ' --query SecretString --output text > n8n-key.pem && chmod 400 n8n-key.pem',
+      ]),
       description: 'Command to retrieve and save the private key from Secrets Manager',
     });
 
