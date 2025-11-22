@@ -89,11 +89,14 @@ services:
       - "443:443"
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
+      - TRAEFIK_DASHBOARD_USER=${TRAEFIK_DASHBOARD_USER:-admin}
+      - TRAEFIK_DASHBOARD_PASSWORD=${TRAEFIK_DASHBOARD_PASSWORD:-changeme}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_data:/letsencrypt
     command:
-      - --api.dashboard=false
+      - --api.dashboard=true
+      - --api.insecure=false
       - --log.level=INFO
       - --accesslog=true
       - --providers.docker=true
@@ -115,6 +118,17 @@ services:
       start_period: 40s
     networks:
       - n8n-network
+    labels:
+      - "traefik.enable=true"
+      # Dashboard router
+      - "traefik.http.routers.traefik-dashboard.rule=Host(\`traefik.\${DOMAIN_NAME}\`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      # Basic auth for dashboard
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-dashboard-auth"
+      - "traefik.http.middlewares.traefik-dashboard-auth.basicauth.users=__TRAEFIK_DASHBOARD_AUTH_HASH_PLACEHOLDER__"
 
 volumes:
   postgres_data:
@@ -126,6 +140,22 @@ networks:
     driver: bridge
 DOCKER_COMPOSE_EOF
 
+# Generate password hash for Traefik dashboard basic auth
+# Traefik requires htpasswd format: user:hashedpassword
+TRAEFIK_DASHBOARD_PASSWORD_PLAIN=$(openssl rand -base64 32)
+# Generate hash using htpasswd if available, otherwise use openssl
+if command -v htpasswd &> /dev/null; then
+    TRAEFIK_DASHBOARD_PASSWORD_HASH=$(htpasswd -nbB admin "$TRAEFIK_DASHBOARD_PASSWORD_PLAIN" | cut -d: -f2)
+elif openssl passwd -apr1 -salt xyz "$TRAEFIK_DASHBOARD_PASSWORD_PLAIN" &>/dev/null; then
+    TRAEFIK_DASHBOARD_PASSWORD_HASH=$(openssl passwd -apr1 -salt xyz "$TRAEFIK_DASHBOARD_PASSWORD_PLAIN")
+else
+    # Fallback: use MD5 hash (less secure but will work)
+    TRAEFIK_DASHBOARD_PASSWORD_HASH=$(openssl passwd -1 "$TRAEFIK_DASHBOARD_PASSWORD_PLAIN")
+fi
+
+# Replace placeholder in docker-compose.yml with actual hash
+sed -i "s|__TRAEFIK_DASHBOARD_AUTH_HASH_PLACEHOLDER__|admin:${TRAEFIK_DASHBOARD_PASSWORD_HASH}|g" /opt/n8n/docker/docker-compose.yml
+
 # Create .env file for Docker Compose
 cat > /opt/n8n/docker/.env << EOF
 DOMAIN_NAME=${DOMAIN_NAME}
@@ -134,6 +164,8 @@ POSTGRES_PASSWORD=\$(openssl rand -base64 32)
 POSTGRES_DB=n8n
 N8N_BASIC_AUTH_USER=admin
 N8N_BASIC_AUTH_PASSWORD=\$(openssl rand -base64 32)
+TRAEFIK_DASHBOARD_USER=admin
+TRAEFIK_DASHBOARD_PASSWORD=${TRAEFIK_DASHBOARD_PASSWORD_PLAIN}
 ACME_EMAIL=admin@${DOMAIN_NAME}
 EOF
 
