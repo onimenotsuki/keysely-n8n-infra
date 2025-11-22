@@ -79,7 +79,6 @@ services:
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.n8n.tls.options=default"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
 
   traefik:
@@ -108,7 +107,6 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN_NAME}}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.acmeserver=https://acme-v02.api.letsencrypt.org/directory
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1"]
       interval: 30s
