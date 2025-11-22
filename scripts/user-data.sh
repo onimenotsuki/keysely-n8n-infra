@@ -110,6 +110,7 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN_NAME}}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1"]
       interval: 30s
@@ -442,4 +443,181 @@ sudo ln -sf /opt/n8n/scripts/check-traefik-local.sh /usr/local/bin/check-traefik
 
 echo "check-traefik-local.sh script installed at /opt/n8n/scripts/check-traefik-local.sh"
 echo "Also available as: check-traefik-local"
+
+# Create script to check SSL certificate status
+sudo tee /opt/n8n/scripts/check-ssl-cert.sh > /dev/null << 'CHECK_SSL_EOF'
+#!/bin/bash
+# Script to check SSL certificate status for Traefik dashboard
+# Usage: ./check-ssl-cert.sh [domain]
+
+set -e
+
+DASHBOARD_DOMAIN="${1:-traefik.n8n.keysely.com}"
+MAIN_DOMAIN=$(echo "$DASHBOARD_DOMAIN" | sed 's/^traefik\.//')
+
+echo "=========================================="
+echo "SSL Certificate Diagnostic Tool"
+echo "=========================================="
+echo "Dashboard Domain: ${DASHBOARD_DOMAIN}"
+echo "Main Domain: ${MAIN_DOMAIN}"
+echo ""
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+check_passed() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+check_failed() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+check_warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
+}
+
+echo "1. Checking DNS resolution..."
+echo "----------------------------------------"
+DASHBOARD_IP=$(dig +short "$DASHBOARD_DOMAIN" | tail -n1 2>/dev/null || echo "")
+MAIN_IP=$(dig +short "$MAIN_DOMAIN" | tail -n1 2>/dev/null || echo "")
+INSTANCE_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "")
+
+if [ -n "$DASHBOARD_IP" ]; then
+    check_passed "DNS resolves ${DASHBOARD_DOMAIN} to ${DASHBOARD_IP}"
+    if [ -n "$INSTANCE_IP" ] && [ "$DASHBOARD_IP" = "$INSTANCE_IP" ]; then
+        check_passed "DNS IP matches instance IP"
+    else
+        check_warning "DNS IP (${DASHBOARD_IP}) does not match instance IP (${INSTANCE_IP})"
+    fi
+else
+    check_failed "DNS does not resolve for ${DASHBOARD_DOMAIN}"
+    echo "  → Action: Create DNS A record: ${DASHBOARD_DOMAIN} → ${INSTANCE_IP}"
+fi
+echo ""
+
+echo "2. Checking HTTP accessibility (port 80)..."
+echo "----------------------------------------"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${DASHBOARD_DOMAIN}" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "308" ]; then
+    check_passed "HTTP is accessible and redirects (code: ${HTTP_CODE})"
+elif [ "$HTTP_CODE" = "000" ]; then
+    check_failed "Cannot connect to http://${DASHBOARD_DOMAIN}"
+    echo "  → Check: Security group allows port 80 from internet"
+    echo "  → Check: DNS is properly configured"
+else
+    check_warning "HTTP returned code ${HTTP_CODE}"
+fi
+echo ""
+
+echo "3. Checking HTTPS accessibility (port 443)..."
+echo "----------------------------------------"
+HTTPS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -k "https://${DASHBOARD_DOMAIN}" 2>/dev/null || echo "000")
+if [ "$HTTPS_CODE" = "401" ] || [ "$HTTPS_CODE" = "200" ]; then
+    check_passed "HTTPS is accessible (code: ${HTTPS_CODE})"
+elif [ "$HTTPS_CODE" = "000" ]; then
+    check_failed "Cannot connect to https://${DASHBOARD_DOMAIN}"
+else
+    check_warning "HTTPS returned code ${HTTPS_CODE}"
+fi
+echo ""
+
+echo "4. Checking SSL certificate..."
+echo "----------------------------------------"
+if command -v openssl &> /dev/null; then
+    CERT_INFO=$(echo | timeout 10 openssl s_client -servername "$DASHBOARD_DOMAIN" -connect "$DASHBOARD_DOMAIN:443" -showcerts 2>/dev/null | openssl x509 -noout -dates -subject -issuer 2>/dev/null || echo "")
+    if [ -n "$CERT_INFO" ]; then
+        check_passed "SSL certificate exists"
+        echo "$CERT_INFO" | while IFS= read -r line; do
+            echo "  $line"
+        done
+        
+        # Check if certificate is from Let's Encrypt
+        if echo "$CERT_INFO" | grep -q "Let's Encrypt"; then
+            check_passed "Certificate is from Let's Encrypt"
+        else
+            check_warning "Certificate is not from Let's Encrypt (may be self-signed or expired)"
+        fi
+        
+        # Check certificate expiration
+        NOT_AFTER=$(echo "$CERT_INFO" | grep "notAfter" | cut -d= -f2)
+        if [ -n "$NOT_AFTER" ]; then
+            echo "  Certificate expires: $NOT_AFTER"
+        fi
+    else
+        check_failed "Cannot retrieve SSL certificate"
+        echo "  → Possible causes:"
+        echo "    - Certificate is still being generated"
+        echo "    - DNS is not properly configured"
+        echo "    - Port 443 is not accessible"
+    fi
+else
+    check_warning "openssl not found - cannot check certificate details"
+fi
+echo ""
+
+echo "5. Checking Traefik logs for certificate errors..."
+echo "----------------------------------------"
+echo "Recent Traefik logs (last 50 lines):"
+docker logs traefik --tail 50 2>&1 | grep -i -E "(certificate|acme|letsencrypt|error|failed)" | tail -20 || echo "No certificate-related messages found"
+echo ""
+
+echo "6. Checking acme.json file..."
+echo "----------------------------------------"
+if docker exec traefik test -f /letsencrypt/acme.json 2>/dev/null; then
+    ACME_SIZE=$(docker exec traefik stat -c%s /letsencrypt/acme.json 2>/dev/null || echo "0")
+    if [ "$ACME_SIZE" -gt 100 ]; then
+        check_passed "acme.json exists and has content (${ACME_SIZE} bytes)"
+        
+        # Try to check if certificate for dashboard domain exists
+        if docker exec traefik cat /letsencrypt/acme.json 2>/dev/null | grep -q "$DASHBOARD_DOMAIN" || docker exec traefik cat /letsencrypt/acme.json 2>/dev/null | grep -q "$MAIN_DOMAIN"; then
+            check_passed "Certificate data found in acme.json"
+        else
+            check_warning "Certificate data for ${DASHBOARD_DOMAIN} not found in acme.json"
+        fi
+    else
+        check_warning "acme.json exists but is small (${ACME_SIZE} bytes) - certificate may still be provisioning"
+    fi
+else
+    check_failed "acme.json file not found"
+fi
+echo ""
+
+echo "7. Recommendations..."
+echo "----------------------------------------"
+echo ""
+if [ -z "$DASHBOARD_IP" ]; then
+    echo "❌ CRITICAL: DNS not configured"
+    echo "   → Create DNS A record: ${DASHBOARD_DOMAIN} → ${INSTANCE_IP}"
+    echo "   → Wait 5-15 minutes for DNS propagation"
+    echo ""
+fi
+
+if [ "$HTTPS_CODE" = "000" ] || [ -z "$CERT_INFO" ]; then
+    echo "⚠️  SSL Certificate Issue Detected"
+    echo "   → Check Traefik logs: docker logs traefik"
+    echo "   → Verify DNS is configured and propagated"
+    echo "   → Ensure port 80 is accessible (required for Let's Encrypt HTTP challenge)"
+    echo "   → Wait 5-10 minutes for certificate generation (first time)"
+    echo "   → Restart Traefik if needed: cd /opt/n8n/docker && docker-compose restart traefik"
+    echo ""
+fi
+
+echo "To view full Traefik logs:"
+echo "  docker logs traefik --tail 100"
+echo ""
+echo "To restart Traefik:"
+echo "  cd /opt/n8n/docker && docker-compose restart traefik"
+echo ""
+CHECK_SSL_EOF
+
+sudo chmod +x /opt/n8n/scripts/check-ssl-cert.sh
+sudo chown ec2-user:ec2-user /opt/n8n/scripts/check-ssl-cert.sh
+sudo ln -sf /opt/n8n/scripts/check-ssl-cert.sh /usr/local/bin/check-ssl-cert
+
+echo "check-ssl-cert.sh script installed at /opt/n8n/scripts/check-ssl-cert.sh"
+echo "Also available as: check-ssl-cert"
 
